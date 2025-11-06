@@ -10,7 +10,5 @@
   "dependencies": {
     "openai": "^4.58.1"
   },
-  "engines": {
-    "node": "20.x"  
   }
 }
