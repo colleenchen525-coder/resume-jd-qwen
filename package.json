@@ -1,0 +1,13 @@
+{
+  "name": "resume-jd-qwen",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "node api/analyze.js"
+  },
+  "dependencies": {
+    "openai": "^4.58.1"
+  }
+}
