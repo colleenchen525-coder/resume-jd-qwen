@@ -3,7 +3,6 @@
   "version": 2,
   "functions": {
     "api/analyze.js": {
-      "runtime": "nodejs20.x"  
     }
   }
 }
