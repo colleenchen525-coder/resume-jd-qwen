@@ -1,7 +1,9 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
   "functions": {
     "api/analyze.js": {
-      "runtime": "nodejs18.5.0"
+      "runtime": "nodejs20.x"  // 修正为 "nodejs18.x"
     }
   }
 }
