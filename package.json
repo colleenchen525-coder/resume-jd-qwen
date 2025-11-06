@@ -11,6 +11,6 @@
     "openai": "^4.58.1"
   },
   "engines": {
-    "node": "20.x"  // 这里添加 Node.js 18.x 版本
+    "node": "20.x"  
   }
 }
