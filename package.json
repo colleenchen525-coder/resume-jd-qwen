@@ -9,5 +9,8 @@
   },
   "dependencies": {
     "openai": "^4.58.1"
+  },
+  "engines": {
+    "node": "18.x"  // 这里添加 Node.js 18.x 版本
   }
 }
