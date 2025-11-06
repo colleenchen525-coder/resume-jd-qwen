@@ -3,7 +3,7 @@
   "version": 2,
   "functions": {
     "api/analyze.js": {
-      "runtime": "vercel/node@18.x"
+      "runtime": "vercel/node@20.x"
     }
   }
 }
