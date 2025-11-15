@@ -175,11 +175,99 @@ document.getElementById("analyzeBtn").addEventListener("click", async () => {
 
     const data = await resp.json();
 
-    // data.resume_advice and data.interview_questions are Markdown strings
-    resumeOutput.innerHTML = markdownToHtml(data.resume_advice || "（无返回）");
-    interviewOutput.innerHTML = markdownToHtml(data.interview_questions || "（无返回）");
+    // 结构：{ jobProfile, candidateProfile, matchScores, suggestions, interviewPrep }
+    const {
+      jobProfile,
+      candidateProfile,
+      matchScores,
+      suggestions,
+      interviewPrep
+    } = data;
+
+    // 简历侧：展示候选人画像 + 优先级建议
+    let resumeHtml = "";
+
+    if (candidateProfile) {
+      resumeHtml += `<h2>候选人画像</h2>`;
+      resumeHtml += `<p>${escapeHtml(candidateProfile.summary || "")}</p>`;
+      resumeHtml += `<p><strong>经验年限：</strong>${escapeHtml(candidateProfile.yearsOfExperience || "")}</p>`;
+      resumeHtml += `<p><strong>行业背景：</strong>${escapeHtml((candidateProfile.industries || []).join("、"))}</p>`;
+      resumeHtml += `<p><strong>核心技能：</strong>${escapeHtml((candidateProfile.coreSkills || []).join("、"))}</p>`;
+
+      if (candidateProfile.projects && candidateProfile.projects.length) {
+        resumeHtml += `<h3>代表项目</h3><ul>`;
+        resumeHtml += candidateProfile.projects.map(p => `
+          <li>
+            <strong>${escapeHtml(p.title || "")}</strong> @ ${escapeHtml(p.company || "")}（${escapeHtml(p.duration || "")}）<br/>
+            高光：${escapeHtml((p.highlights || []).join("；"))}<br/>
+            指标：${escapeHtml((p.metrics || []).join("；"))}
+          </li>
+        `).join("");
+        resumeHtml += `</ul>`;
+      }
+    }
+
+    if (suggestions) {
+      resumeHtml += `<h2>简历优化建议（按优先级）</h2>`;
+      if (suggestions.priorityList && suggestions.priorityList.length) {
+        resumeHtml += `<ul>`;
+        resumeHtml += suggestions.priorityList.map(item => `
+          <li>
+            <strong>${escapeHtml(item.priority || "")}</strong> - ${escapeHtml(item.title || "")}<br/>
+            原因：${escapeHtml(item.reason || "")}<br/>
+            <em>Before：</em>${escapeHtml(item.beforeExample || "（原文略）")}<br/>
+            <em>After：</em>${escapeHtml(item.afterExample || "")}
+          </li>
+        `).join("");
+        resumeHtml += `</ul>`;
+      }
+
+      if (suggestions.coveredRequirements && suggestions.coveredRequirements.length) {
+        resumeHtml += `<h3>已覆盖的 JD 要求</h3><p>${escapeHtml(suggestions.coveredRequirements.join("；"))}</p>`;
+      }
+      if (suggestions.missingRequirements && suggestions.missingRequirements.length) {
+        resumeHtml += `<h3>不足/缺失的 JD 要求</h3><p>${escapeHtml(suggestions.missingRequirements.join("；"))}</p>`;
+      }
+    }
+
+    resumeOutput.innerHTML = resumeHtml || "（暂无内容）";
+
+    // JD + 匹配度 + 面试准备放在右侧
+    let interviewHtml = "";
+
+    if (matchScores) {
+      interviewHtml += `<h2>匹配度概览</h2>`;
+      interviewHtml += `<p><strong>总体匹配度：</strong>${matchScores.overall ?? "-"} / 100</p>`;
+      interviewHtml += `<p>技能匹配：${matchScores.skillFit ?? "-"}；经验匹配：${matchScores.experienceFit ?? "-"}；行业匹配：${matchScores.industryFit ?? "-"}；业务匹配：${matchScores.businessFit ?? "-"}</p>`;
+      interviewHtml += `<p>${escapeHtml(matchScores.notes || "")}</p>`;
+    }
+
+    if (jobProfile) {
+      interviewHtml += `<h2>JD 岗位画像</h2>`;
+      interviewHtml += `<p><strong>职位：</strong>${escapeHtml(jobProfile.jobTitle || "")}（${escapeHtml(jobProfile.level || "")}）</p>`;
+      interviewHtml += `<p><strong>Must-have：</strong>${escapeHtml((jobProfile.mustHaveSkills || []).join("、"))}</p>`;
+      interviewHtml += `<p><strong>Nice-to-have：</strong>${escapeHtml((jobProfile.niceToHaveSkills || []).join("、"))}</p>`;
+      interviewHtml += `<p><strong>业务方向：</strong>${escapeHtml((jobProfile.businessFocus || []).join("、"))}</p>`;
+      interviewHtml += `<p><strong>硬性要求：</strong>${escapeHtml((jobProfile.hardRequirements || []).join("、"))}</p>`;
+    }
+
+    if (interviewPrep) {
+      interviewHtml += `<h2>面试准备要点</h2>`;
+      if (interviewPrep.sellingPoints?.length) {
+        interviewHtml += `<p><strong>一定要讲的亮点：</strong><br/>${escapeHtml(interviewPrep.sellingPoints.join("；"))}</p>`;
+      }
+      if (interviewPrep.riskPoints?.length) {
+        interviewHtml += `<p><strong>可能被追问/有风险的点：</strong><br/>${escapeHtml(interviewPrep.riskPoints.join("；"))}</p>`;
+      }
+      if (interviewPrep.suggestedQuestions?.length) {
+        interviewHtml += `<p><strong>面试官可能会问的问题：</strong><br/>${escapeHtml(interviewPrep.suggestedQuestions.join("；"))}</p>`;
+      }
+    }
+
+    interviewOutput.innerHTML = interviewHtml || "（暂无内容）";
 
     status.textContent = "分析完成 ✅";
+
   } catch (err) {
     console.error(err);
     alert("分析失败，请稍后再试或检查环境变量是否正确。");
