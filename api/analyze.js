@@ -1,94 +1,93 @@
 // api/analyze.js
 import OpenAI from "openai";
 
-function buildAnalysisInstruction() {
+/**
+ * 最小安全输出：只允许这 3 个字段
+ * - match_level: Strong | Partial | Weak
+ * - rationale: 一句话（短）
+ * - risk_signals: 恰好 2 条
+ */
+function buildInstruction() {
   return `
-你是一名严谨的互联网大厂招聘专家 & 实际负责业务的产品经理团队负责人，擅长分析「候选人简历」与「目标 JD」的匹配度。
-现在你会看到：候选人简历（可能是图文混合） 和 目标 JD（也可能是图文混合）。
+你是严谨的招聘面试官与用人经理。你的任务不是预测录用结果，而是把主观判断结构化为「可讨论的信号」。
+禁止：给建议、给通过率/概率、给行动方案、给简历修改、给面试题、给职业规划。禁止输出任何多余文字或解释。
+只允许基于输入的 JD 与 Resume 文本做判断；不要推断敏感属性。
 
-你的任务是：
-1）解析 JD，生成结构化的岗位画像 jobProfile
-2）解析候选人简历，生成结构化的候选人画像 candidateProfile
-3）给出多维度匹配度评分 matchScores
-4）给出可执行的简历修改建议 suggestions
-5）给出面试准备要点 interviewPrep
+【输出格式要求（必须严格遵守）】
+- 只输出合法 JSON（不要 markdown、不要代码块、不要多余字段）
+- JSON 必须是一个对象，且只能包含以下 3 个 key：
+  1) match_level: 只能是 "Strong" / "Partial" / "Weak"
+  2) rationale: 一句短句（中文<=30字；英文<=120字符）
+  3) risk_signals: 恰好 2 条字符串数组（每条中文<=18字；英文<=80字符）
+- 如果信息不足：match_level 选 "Weak"，rationale 写“信息不足”，risk_signals 用通用但不越权的风险（例如“信息不足”“证据不充分”）
 
-【输出要求（非常重要）】
-- 只输出 JSON，不要输出任何解释说明。
-- JSON 必须是合法 JSON，对象最外层结构如下所示。
-- 字段名必须是英文，内容必须是中文。
-- 数值分数统一 0-100 的整数。
-
-JSON 结构（示例，仅供参考，实际请填充真实内容）：
-
-{
-  "jobProfile": {
-    "jobTitle": "string",
-    "level": "string",
-    "mustHaveSkills": ["string"],
-    "niceToHaveSkills": ["string"],
-    "yearsOfExperience": "string",
-    "businessFocus": ["string"],
-    "hardRequirements": ["string"]
-  },
-  "candidateProfile": {
-    "summary": "string",
-    "yearsOfExperience": "string",
-    "industries": ["string"],
-    "coreSkills": ["string"],
-    "projects": [
-      {
-        "title": "string",
-        "company": "string",
-        "duration": "string",
-        "highlights": ["string"],
-        "metrics": ["string"]
-      }
-    ]
-  },
-  "matchScores": {
-    "overall": 80,
-    "skillFit": 85,
-    "experienceFit": 75,
-    "industryFit": 60,
-    "businessFit": 70,
-    "notes": "string"
-  },
-  "suggestions": {
-    "priorityList": [
-      {
-        "priority": "P0",
-        "title": "string",
-        "reason": "string",
-        "beforeExample": "string",
-        "afterExample": "string"
-      }
-    ],
-    "coveredRequirements": ["string"],
-    "missingRequirements": ["string"]
-  },
-  "interviewPrep": {
-    "sellingPoints": ["string"],
-    "riskPoints": ["string"],
-    "suggestedQuestions": ["string"]
-  }
+只输出 JSON。`;
 }
 
-请务必严格按上述 JSON 结构输出，一个完整的 JSON 对象，不要有多余文字。
-`;
+/** 尝试从模型输出里截取第一段 JSON 对象 */
+function extractJsonObject(text) {
+  if (!text || typeof text !== "string") return null;
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) return null;
+  return text.slice(start, end + 1);
 }
 
-// helper: convert text + imageDataUrl into multi-modal parts
-function makePartsFromInputs(text, imageDataUrl, textWrapper = null) {
-  const parts = [];
-  if (imageDataUrl) {
-    parts.push({ type: "image_url", image_url: { url: imageDataUrl } });
+/** 兼容 content 可能为 string / array / object */
+function contentToText(rawContent) {
+  if (!rawContent) return "";
+  if (typeof rawContent === "string") return rawContent;
+
+  // 有的模型会返回数组 parts
+  if (Array.isArray(rawContent)) {
+    return rawContent
+      .map((p) => {
+        if (typeof p === "string") return p;
+        if (p && typeof p === "object") return p.text ?? "";
+        return "";
+      })
+      .join("\n");
   }
-  if (text && text.trim()) {
-    const t = textWrapper ? textWrapper(text) : text;
-    parts.push({ type: "text", text: t });
+
+  // 有的会返回 {text: "..."}
+  if (rawContent && typeof rawContent === "object" && rawContent.text) {
+    return rawContent.text;
   }
-  return parts;
+
+  return "";
+}
+
+/** 强制归一化成我们要的结构；失败则返回 null */
+function normalizeResult(obj) {
+  if (!obj || typeof obj !== "object") return null;
+
+  const level = obj.match_level;
+  const okLevel = level === "Strong" || level === "Partial" || level === "Weak";
+  const rationale = typeof obj.rationale === "string" ? obj.rationale.trim() : "";
+  const risksRaw = Array.isArray(obj.risk_signals) ? obj.risk_signals : [];
+
+  const risks = risksRaw
+    .map((x) => (typeof x === "string" ? x.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 2);
+
+  if (!okLevel || !rationale || risks.length !== 2) return null;
+
+  // 最终只允许 3 个字段
+  return {
+    match_level: level,
+    rationale,
+    risk_signals: risks
+  };
+}
+
+/** 兜底输出（永远给前端稳定结构） */
+function fallbackResult(reason = "信息不足") {
+  return {
+    match_level: "Weak",
+    rationale: reason,
+    risk_signals: ["信息不足", "证据不充分"]
+  };
 }
 
 export default async function handler(req, res) {
@@ -97,68 +96,63 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === "object" ? req.body : JSON.parse(req.body || "{}");
 
-    const resumeText = body.resume_text ?? body.resume ?? "";
-    const resumeImage = body.resume_image ?? body.resumeImage ?? null;
-    const jdText = body.jd_text ?? body.jd ?? "";
-    const jdImage = body.jd_image ?? body.jdImage ?? null;
+    // 只保留文本输入：图片相关字段直接忽略（前端我们后面会删 UI）
+    const resumeText = (body.resume_text ?? body.resume ?? "").toString();
+    const jdText = (body.jd_text ?? body.jd ?? "").toString();
 
-    if (!resumeText && !resumeImage) return res.status(400).json({ error: "Missing resume (text or image)" });
-    if (!jdText && !jdImage) return res.status(400).json({ error: "Missing JD (text or image)" });
-
-    const MAX_LEN = 10 * 1024 * 1024;
-    for (const d of [resumeImage, jdImage]) {
-      if (d && typeof d === "string" && d.length > MAX_LEN) {
-        return res.status(400).json({ error: "Image too large" });
-      }
-    }
+    if (!resumeText.trim()) return res.status(400).json({ error: "Missing resume text" });
+    if (!jdText.trim()) return res.status(400).json({ error: "Missing JD text" });
 
     const client = new OpenAI({
       apiKey: process.env.LLM_API_KEY,
       baseURL: process.env.LLM_BASE_URL
     });
+
     const MODEL = process.env.LLM_MODEL || "qwen3-vl-30b-a3b-instruct";
 
-    const analysisParts = [
-      ...makePartsFromInputs(resumeText, resumeImage, (t) => "（以下为候选人简历）\n" + t),
-      ...makePartsFromInputs(jdText, jdImage, (t) => "（以下为目标 JD）\n" + t),
-      { type: "text", text: buildAnalysisInstruction() }
-    ];
+    const userPrompt = `JD:\n${jdText}\n\nResume:\n${resumeText}`;
 
     const analysisResp = await client.chat.completions.create({
       model: MODEL,
-      temperature: 0.3,
+      temperature: 0.2,
       messages: [
         {
           role: "system",
-          content: "你是严谨的中文招聘专家和用人经理，善于分析岗位要求与候选人简历匹配度，并输出结构化 JSON。"
+          content: "你是严谨的招聘面试官。你只输出符合要求的 JSON，不输出任何解释。"
         },
-        { role: "user", content: analysisParts }
+        {
+          role: "user",
+          content: `${buildInstruction()}\n\n${userPrompt}`
+        }
       ]
     });
 
     const rawContent = analysisResp?.choices?.[0]?.message?.content;
+    const rawText = contentToText(rawContent);
 
-    // 兼容 content 可能为 string 或数组
-    let rawText = "";
-    if (Array.isArray(rawContent)) {
-      rawText = rawContent.map((p) => (typeof p === "string" ? p : (p.text ?? ""))).join("\n");
-    } else if (typeof rawContent === "string") {
-      rawText = rawContent;
-    } else if (rawContent && typeof rawContent === "object" && rawContent.text) {
-      rawText = rawContent.text;
+    // 尝试提取 JSON
+    const jsonText = extractJsonObject(rawText);
+    if (!jsonText) {
+      return res.status(200).json(fallbackResult("输出格式不符合"));
     }
 
     let parsed;
     try {
-      parsed = JSON.parse(rawText);
+      parsed = JSON.parse(jsonText);
     } catch (e) {
       console.error("JSON parse error:", e, "rawText:", rawText);
-      return res.status(500).json({ error: "LLM JSON parse failed", rawText });
+      return res.status(200).json(fallbackResult("解析失败"));
     }
 
-    return res.status(200).json(parsed);
+    const normalized = normalizeResult(parsed);
+    if (!normalized) {
+      return res.status(200).json(fallbackResult("输出不规范"));
+    }
+
+    return res.status(200).json(normalized);
   } catch (err) {
     console.error("analyze error full:", err?.response?.data ?? err);
-    return res.status(500).json({ error: "Internal Server Error" });
+    // 这里也返回稳定结构，避免前端渲染挂掉
+    return res.status(200).json(fallbackResult("服务暂不可用"));
   }
 }
